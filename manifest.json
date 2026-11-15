@@ -1,0 +1,13 @@
+{
+  "name": "Kasir SORE Cafe & Space",
+  "short_name": "Kasir SORE",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#F7F3EC",
+  "theme_color": "#1E1B2E",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
