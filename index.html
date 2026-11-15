@@ -452,7 +452,7 @@ async function pastikanPrinter() {
 }
 
 function bytes(a) { return new Uint8Array(a); }
-function asciiTeks(s) { return s.replace(/[^\x20-\x7E]/g, '?'); }
+function asciiTeks(s) { return s.replace(/[^\x20-\x7E\n]/g, '?'); }
 function teksByte(s) { return new TextEncoder().encode(asciiTeks(s)); }
 function gabung(arrs) {
   const len = arrs.reduce((s, a) => s + a.length, 0);
