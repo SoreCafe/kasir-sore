@@ -655,6 +655,91 @@ async function tesCetak() {
 }
 
 /* =========================================================
+   EKSPOR CSV (dibuka langsung di Google Sheets)
+   ========================================================= */
+/* Sel CSV: diberi tanda kutip jika berisi koma, kutip, atau enter. */
+function csvCell(v) {
+  const s = v === null || v === undefined ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/* BOM di awal membuat Google Sheets membaca huruf Indonesia dengan benar. */
+function toCsv(headers, rows) {
+  return '\uFEFF' + [headers].concat(rows).map(r => r.map(csvCell).join(',')).join('\r\n');
+}
+
+function fileCsv(nama, headers, rows) {
+  const isi = toCsv(headers, rows);
+  return { nama: nama + '.csv', file: new File([isi], nama + '.csv', { type: 'text/csv' }) };
+}
+
+const urutTx = (a, b) => ((a.tanggal + a.jam) < (b.tanggal + b.jam) ? -1 : 1);
+
+function paketTransaksi(txs, label) {
+  return [
+    fileCsv('transaksi-' + label, ['Tanggal', 'Jam', 'Nomor', 'Customer', 'Metode', 'Subtotal', 'Diskon', 'Total', 'Bayar', 'Kembali'],
+      txs.map(t => [t.tanggal, t.jam, t.nomor, t.nama, t.metode, t.subtotal, t.diskon_rp, t.total, t.bayar, t.kembali])),
+    fileCsv('item-' + label, ['Tanggal', 'Jam', 'Nomor', 'Menu', 'Qty', 'Harga', 'Subtotal'],
+      txs.flatMap(t => t.items.map(i => [t.tanggal, t.jam, t.nomor, i.nama, i.qty, i.harga, i.subtotal])))
+  ];
+}
+
+/* Laporan untuk periode yang dipilih: harian, 7 hari, atau bulan. */
+function paketLaporan(mode, tanggal) {
+  const d = laporan(mode, tanggal);
+  const txs = D.transaksi.filter(t => t.status === 'Lunas' && t.tanggal >= d.dari && t.tanggal <= d.sampai).sort(urutTx);
+  return paketTransaksi(txs, d.dari + '-sd-' + d.sampai);
+}
+
+/* Semua data: transaksi, produk, bahan, pembelian, dan resep. */
+function paketSemua() {
+  const txs = D.transaksi.filter(t => t.status === 'Lunas').sort(urutTx);
+  return paketTransaksi(txs, 'semua-' + hariIni()).concat([
+    fileCsv('produk-' + hariIni(), ['Nama', 'Kategori', 'Harga', 'Aktif'],
+      D.produk.map(p => [p.nama, p.kategori, p.harga, p.aktif])),
+    fileCsv('bahan-' + hariIni(), ['Nama', 'Satuan dasar', 'Harga tertinggi per satuan', 'Aktif'],
+      D.bahan.map(b => [b.nama, b.satuan, b.harga, b.aktif])),
+    fileCsv('pembelian-' + hariIni(), ['Tanggal', 'Bahan', 'Supplier', 'Qty beli', 'Satuan beli', 'Total', 'Harga per satuan dasar'],
+      D.pembelian.map(p => [p.tanggal, p.nama, p.supplier, p.qty, p.satuan_beli, p.total, p.per_dasar])),
+    fileCsv('resep-' + hariIni(), ['Produk', 'Bahan', 'Qty', 'Satuan'],
+      D.resep.map(r => [produkById(r.id_produk)?.nama || '', bahanById(r.id_bahan)?.nama || '', r.qty, r.satuan]))
+  ]);
+}
+
+/* Membagikan file lewat menu Bagikan (pilih Google Sheets). Jika tidak didukung, file diunduh satu per satu. */
+async function unduhFiles(list) {
+  const files = list.map(x => x.file);
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try {
+      await navigator.share({ files, title: 'Data Kasir SORE' });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+  for (const x of list) {
+    const url = URL.createObjectURL(x.file);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = x.nama;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    await new Promise(r => setTimeout(r, 600));
+  }
+  toast('File diunduh. Buka di Google Sheets dari folder Download.', false, 4000);
+}
+
+async function ekspor(fn) {
+  try {
+    await unduhFiles(fn());
+  } catch (e) {
+    toast('Gagal membuat file: ' + e.message, true, 4000);
+  }
+}
+
+/* =========================================================
    STATE TAMPILAN
    ========================================================= */
 const S = {
@@ -669,7 +754,8 @@ const S = {
   metode: 'Cash',
   bayarInput: '',
   lastTx: null,
-  det: { mode: 'harian', tanggal: '' }
+  det: { mode: 'harian', tanggal: '' },
+  exp: { mode: 'harian', tanggal: hariIni() }
 };
 function kosongCart() { return { id: null, nomor: '', nama: '', items: [], dtipe: '', dnilai: '' }; }
 
@@ -1206,7 +1292,7 @@ function barChart(rows, kosong) {
 }
 
 /* =========================================================
-   DATA: BACKUP, RESTORE, LOGO, DAN LEBAR NOTA
+   DATA: EKSPOR, BACKUP, RESTORE, LOGO, DAN LEBAR NOTA
    ========================================================= */
 function viewData() {
   const adaLogo = !!logoNota();
@@ -1214,8 +1300,22 @@ function viewData() {
   return `
     <h1>Data</h1>
     <p class="sub">Semua data disimpan di tablet ini. Buat backup secara berkala, lalu simpan filenya di tempat aman.</p>
-    <div class="row" style="margin-bottom:24px"><button class="btn" onclick="eksporData()">Buat backup (unduh)</button></div>
-    <h2>Pulihkan dari backup</h2>
+
+    <h2>Download ke Google Sheets</h2>
+    <p class="note">File CSV ini dibuka langsung di Google Sheets. Di Android, pilih Google Sheets dari menu Bagikan.</p>
+    <div class="row">
+      <div class="seg-row" style="margin:0">
+        ${[['harian', 'Harian'], ['7hari', '7 Hari'], ['bulan', 'Bulan']].map(([k, l]) => `<button class="seg ${S.exp.mode === k ? 'on' : ''}" onclick="setExpMode('${k}')">${l}</button>`).join('')}
+      </div>
+      <input type="date" value="${esc(S.exp.tanggal)}" onchange="setExpTanggal(this.value)" style="width:auto">
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" onclick="ekspor(() => paketLaporan(S.exp.mode, S.exp.tanggal))">Laporan periode ini</button>
+      <button class="ghost" onclick="ekspor(() => paketSemua())">Semua data</button>
+    </div>
+
+    <h2 style="margin-top:28px">Backup (file aplikasi)</h2>
+    <div class="row" style="margin-bottom:16px"><button class="ghost" onclick="eksporData()">Buat backup (unduh)</button></div>
     <p class="note">Data yang ada sekarang akan diganti dengan isi file backup.</p>
     <input type="file" accept="application/json" onchange="imporData(this)">
 
@@ -1234,6 +1334,9 @@ function viewData() {
     </div>
     <div class="row"><button class="btn" onclick="tesCetak()">Tes cetak lebar</button></div>`;
 }
+
+function setExpMode(m) { S.exp.mode = m; render(); }
+function setExpTanggal(v) { if (v) { S.exp.tanggal = v; render(); } }
 
 function eksporData() {
   const isi = JSON.stringify({ versi: 1, dibuat: new Date().toISOString(), data: D }, null, 2);
