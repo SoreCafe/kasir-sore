@@ -25,6 +25,8 @@ aside{background:var(--ink);color:#fff;padding:18px 12px;display:flex;flex-direc
 .pbox{margin-top:auto;padding:10px;border-top:1px solid #3a3450;font-size:12px}
 .pdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#888;margin-right:6px;vertical-align:middle}
 .pdot.on{background:#4ade80}
+.pbox .btn-printer{appearance:none;margin-top:8px;width:100%;padding:9px 10px;border-radius:8px;border:1px solid #fff;background:transparent;color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.pbox .btn-printer:hover{background:var(--ink-2)}
 main{overflow:auto;padding:22px 26px 56px;min-width:0}
 h1{font-size:21px;font-weight:800;letter-spacing:-.02em;margin:0 0 2px}
 h2{font-size:14.5px;font-weight:700;margin:0 0 12px}
@@ -123,7 +125,7 @@ td.actions{text-align:right;white-space:nowrap}
     <nav class="nav" id="nav"></nav>
     <div class="pbox">
       <div><span class="pdot" id="pdot"></span><span id="ptxt">Printer belum terhubung</span></div>
-      <button class="ghost small" style="margin-top:8px;width:100%" onclick="hubungkanPrinter()">Hubungkan printer</button>
+      <button class="btn-printer" onclick="hubungkanPrinter()">Hubungkan printer</button>
     </div>
   </aside>
   <main id="main"></main>
@@ -148,7 +150,6 @@ const STORES = ['bahan','pembelian','produk','resep','transaksi'];
 
 /* =========================================================
    DATABASE LOKAL (IndexedDB)
-   Semua data disimpan di tablet. Di memori hanya disalin untuk tampilan yang cepat.
    ========================================================= */
 const D = { bahan: [], pembelian: [], produk: [], resep: [], transaksi: [] };
 let db = null;
@@ -277,8 +278,7 @@ async function saveProduk(d) {
   if (!d.nama.trim()) throw err('Nama produk belum diisi.');
   if (!(harga >= 0)) throw err('Harga jual tidak valid.');
   const p = d.id ? produkById(d.id) : null;
-  const obj = { id: p ? p.id : newId('PRD'), nama: d.nama.trim(), kategori: (d.kategori || '').trim(), harga, aktif: d.aktif === false ? 'Tidak' : 'Ya' };
-  await simpan('produk', obj);
+  await simpan('produk', { id: p ? p.id : newId('PRD'), nama: d.nama.trim(), kategori: (d.kategori || '').trim(), harga, aktif: d.aktif === false ? 'Tidak' : 'Ya' });
 }
 
 async function simpanHpp(idProduk, lines, harga) {
@@ -303,7 +303,6 @@ function nomorBerikut() {
   return 'SC-' + String(maks + 1).padStart(6, '0');
 }
 
-/* Sama dengan aturan lama: harga dan HPP dikunci saat transaksi disimpan. */
 async function simpanTransaksi(d) {
   if (d.status === 'Open' && !d.nama.trim()) throw err('Isi nama customer untuk open bill.');
   const items = (d.items || []).filter(i => i.qty > 0);
@@ -403,16 +402,15 @@ const PR = { dev: null, chr: null };
 const ESC = 0x1B, GS = 0x1D;
 const LAYANAN = [0xff00, 0xffe0, 0xfff0, '000018f0-0000-1000-8000-00805f9b34fb', '49535343-fe7d-4ae5-8fa9-9fafd205e455'];
 
-function ambilKarakteristik(server) {
-  return server.getPrimaryServices().then(async services => {
-    for (const s of services) {
-      const chars = await s.getCharacteristics();
-      for (const c of chars) {
-        if (c.properties.write || c.properties.writeWithoutResponse) return c;
-      }
+async function ambilKarakteristik(server) {
+  const services = await server.getPrimaryServices();
+  for (const s of services) {
+    const chars = await s.getCharacteristics();
+    for (const c of chars) {
+      if (c.properties.write || c.properties.writeWithoutResponse) return c;
     }
-    return null;
-  });
+  }
+  return null;
 }
 
 function updatePrinterUI() {
@@ -835,10 +833,13 @@ function setPTab(k) { syncCart(); S.pTab = k; if (k !== 'baru') S.bayarPanel = f
 
 function viewKasir() {
   const c = S.cart, tot = hitungCart();
-  const items = c.items.map((it, i) => `<div class="citem">
-    <div class="cname"><b>${esc(produkById(it.id_produk)?.nama || '-')}</b><span class="muted" style="font-size:12px">${rp(produkById(it.id_produk)?.harga)}</span></div>
-    <div class="qty"><button class="icon" onclick="ubahQty(${i},-1)">−</button><span>${it.qty}</span><button class="icon" onclick="ubahQty(${i},1)">+</button></div>
-    <div class="num">${rp((produkById(it.id_produk)?.harga || 0) * it.qty)}</div></div>`).join('');
+  const items = c.items.map((it, i) => {
+    const p = produkById(it.id_produk);
+    return `<div class="citem">
+      <div class="cname"><b>${esc(p?.nama || '-')}</b><span class="muted" style="font-size:12px">${rp(p?.harga)}</span></div>
+      <div class="qty"><button class="icon" onclick="ubahQty(${i},-1)">−</button><span>${it.qty}</span><button class="icon" onclick="ubahQty(${i},1)">+</button></div>
+      <div class="num">${rp((p?.harga || 0) * it.qty)}</div></div>`;
+  }).join('');
   const adaItem = c.items.length > 0;
   return `
     ${S.lastTx ? `<div class="terakhir"><div><b>Tersimpan: ${esc(S.lastTx.nomor)}</b>
@@ -1091,9 +1092,7 @@ function viewData() {
   return `
     <h1>Data</h1>
     <p class="sub">Semua data disimpan di tablet ini. Buat backup secara berkala, lalu simpan filenya di tempat aman.</p>
-    <div class="row" style="margin-bottom:24px">
-      <button class="btn" onclick="eksporData()">Buat backup (unduh)</button>
-    </div>
+    <div class="row" style="margin-bottom:24px"><button class="btn" onclick="eksporData()">Buat backup (unduh)</button></div>
     <h2>Pulihkan dari backup</h2>
     <p class="note">Data yang ada sekarang akan diganti dengan isi file backup.</p>
     <input type="file" accept="application/json" onchange="imporData(this)">`;
@@ -1147,13 +1146,15 @@ async function mulai() {
     $('main').innerHTML = `<h1>Data belum bisa dibuka</h1><p class="empty">${esc(e.message)}</p>`;
     return;
   }
-  /* Coba sambung ulang printer yang pernah dipasangkan (tanpa dialog). */
   try {
     if (navigator.bluetooth && navigator.bluetooth.getDevices) {
       const daftar = await navigator.bluetooth.getDevices();
-      if (daftar.length) { PR.dev = daftar[0]; PR.dev.addEventListener('gattserverdisconnected', () => { PR.chr = null; updatePrinterUI(); }); }
+      if (daftar.length) {
+        PR.dev = daftar[0];
+        PR.dev.addEventListener('gattserverdisconnected', () => { PR.chr = null; updatePrinterUI(); });
+      }
     }
-  } catch (e) { /* tidak didukung, pasangkan dari tombol */ }
+  } catch (e) { /* tidak didukung: pasangkan dari tombol */ }
   updatePrinterUI();
   go('home');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
