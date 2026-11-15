@@ -462,6 +462,18 @@ function gabung(arrs) {
   return out;
 }
 
+/* ---------- Lebar nota ---------- */
+function lebarNota() {
+  const n = parseInt(localStorage.getItem('lebarNota') || '32', 10);
+  return [32, 42, 48].includes(n) ? n : 32;
+}
+
+function setLebar(n) {
+  localStorage.setItem('lebarNota', String(n));
+  toast('Lebar nota diatur ke ' + n + ' karakter.');
+  render();
+}
+
 /* ---------- Logo nota ---------- */
 function logoNota() {
   try {
@@ -520,19 +532,16 @@ function hapusLogo() {
 }
 
 /* ---------- Isi nota ---------- */
-/* Prefiks: '#' tengah tebal, '@' tengah, '*' kiri tebal, '~LOGO~' gambar logo, '~CUT~' garis pemisah. */
+/* Prefiks: '#' tengah tebal, '@' tengah, '*' kiri tebal, '~LOGO~' gambar logo, '~CUT~' potong kertas. */
 function buatTeksNota(tx) {
-  const W = 32, garis = '-'.repeat(W);
+  const W = lebarNota(), garis = '-'.repeat(W);
   const r0 = n => nf.format(Math.round(Number(n) || 0));
   const rp0 = n => 'Rp' + r0(n);
   const dua = (k, v) => k + ' '.repeat(Math.max(1, W - k.length - v.length)) + v;
   const label = tx.metode === 'Cash' ? 'Tunai' : tx.metode;
 
   const salinan = () => {
-    const L = ['~LOGO~'];
-    L.push(dua(tx.nomor, tx.jam));
-    L.push(tx.tanggal);
-    L.push(garis);
+    const L = ['~LOGO~', dua(tx.nomor, tx.jam), tx.tanggal, garis];
     if (tx.nama) { L.push('Customer: ' + tx.nama); L.push(garis); }
     tx.items.forEach(i => {
       L.push(i.nama);
@@ -546,23 +555,21 @@ function buatTeksNota(tx) {
     L.push('*' + dua('TOTAL', rp0(tx.total)));
     L.push(dua('Bayar (' + label + ')', rp0(tx.bayar)));
     L.push(garis);
-    L.push('@Terima kasih');
-    L.push('@IG: @sorecafe.sda');
-    L.push('@Password WiFi: sorecafesidoarjo');
+    L.push('@Terima kasih', '@IG: @sorecafe.sda', '@Password WiFi: sorecafesidoarjo');
     return L.join('\n');
   };
 
   return salinan() + '\n~CUT~\n' + salinan() + '\n~CUT~';
 }
 
+/* Teks diubah menjadi perintah printer. Setiap '~CUT~' hanya memotong kertas, tanpa garis tambahan. */
 function bangunData(teks) {
   const parts = [bytes([ESC, 0x40])];
+  const potong = () => parts.push(bytes([ESC, 0x61, 0, ESC, 0x45, 0]), teksByte('\n\n\n'), bytes([GS, 0x56, 0x42, 0x00]));
+
   teks.split('\n').forEach(raw => {
     const t = raw.trim();
-    if (t === '~CUT~') {
-      parts.push(bytes([ESC, 0x61, 0, ESC, 0x45, 0]), teksByte('-'.repeat(32) + '\n'));
-      return;
-    }
+    if (t === '~CUT~') { potong(); return; }
     if (t === '~LOGO~') {
       const lg = logoNota();
       if (lg) parts.push(bytes([ESC, 0x61, 1]), rasterBytes(lg), teksByte('\n'));
@@ -574,7 +581,7 @@ function bangunData(teks) {
     const tebal = kode === '#' || kode === '*' ? 1 : 0;
     parts.push(bytes([ESC, 0x61, tengah, ESC, 0x45, tebal]), teksByte(isi + '\n'));
   });
-  parts.push(bytes([ESC, 0x61, 0, ESC, 0x45, 0]), teksByte('\n\n\n\n'), bytes([GS, 0x56, 0x42, 0x00]));
+  parts.push(bytes([ESC, 0x61, 0, ESC, 0x45, 0]), teksByte('\n\n\n'));
   return gabung(parts);
 }
 
@@ -604,6 +611,35 @@ async function cetakNota(tx) {
     toast('Gagal cetak. Coba Cetak nota lagi.', true, 4500);
     return false;
   }
+}
+
+/* Cetak teks apa pun dengan format yang sama. Dipakai untuk tes lebar. */
+async function cetakTeksLangsung(teks, okMsg) {
+  if (!(await pastikanPrinter())) return toast('Printer belum terhubung.', true, 4000);
+  try {
+    await kirimKePrinter(bangunData(teks));
+    toast(okMsg || 'Tercetak.');
+  } catch (e) {
+    PR.chr = null;
+    updatePrinterUI();
+    toast('Gagal cetak.', true, 4000);
+  }
+}
+
+/* Tes lebar: angka yang tepat sampai ujung kertas menunjukkan lebar yang benar. */
+async function tesCetak() {
+  const W = lebarNota();
+  const angka = '1234567890'.repeat(5).slice(0, W);
+  const teks = [
+    '#TES LEBAR',
+    '@' + W + ' karakter',
+    angka,
+    '-'.repeat(W),
+    'KIRI' + ' '.repeat(Math.max(1, W - 8)) + 'KANAN',
+    '-'.repeat(W),
+    '~CUT~'
+  ].join('\n');
+  await cetakTeksLangsung(teks, 'Tes cetak terkirim.');
 }
 
 /* =========================================================
@@ -1158,10 +1194,11 @@ function barChart(rows, kosong) {
 }
 
 /* =========================================================
-   DATA: BACKUP, RESTORE, DAN LOGO
+   DATA: BACKUP, RESTORE, LOGO, DAN LEBAR NOTA
    ========================================================= */
 function viewData() {
   const adaLogo = !!logoNota();
+  const lebar = lebarNota();
   return `
     <h1>Data</h1>
     <p class="sub">Semua data disimpan di tablet ini. Buat backup secara berkala, lalu simpan filenya di tempat aman.</p>
@@ -1171,12 +1208,19 @@ function viewData() {
     <input type="file" accept="application/json" onchange="imporData(this)">
 
     <h2 style="margin-top:28px">Logo nota</h2>
-    <p class="note">Logo dicetak di bagian atas nota. Pakai gambar logo hitam di latar putih. Lebar sekitar 200 px sudah cukup.</p>
+    <p class="note">Logo dicetak di bagian atas nota. Pakai gambar logo hitam di latar putih.</p>
     <p class="note">${adaLogo ? 'Logo sudah tersimpan.' : 'Belum ada logo.'}</p>
     <div class="row">
       <input type="file" accept="image/*" onchange="simpanLogo(this)" style="max-width:260px">
       ${adaLogo ? '<button class="ghost" onclick="hapusLogo()">Hapus logo</button>' : ''}
-    </div>`;
+    </div>
+
+    <h2 style="margin-top:28px">Lebar kertas nota</h2>
+    <p class="note">Tekan Tes cetak lebar dulu, lalu pilih angka yang pas. Biasanya 32 karakter.</p>
+    <div class="seg-row">
+      ${[32, 42, 48].map(n => `<button class="seg ${lebar === n ? 'on' : ''}" onclick="setLebar(${n})">${n} karakter</button>`).join('')}
+    </div>
+    <div class="row"><button class="btn" onclick="tesCetak()">Tes cetak lebar</button></div>`;
 }
 
 function eksporData() {
