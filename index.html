@@ -452,6 +452,7 @@ async function pastikanPrinter() {
 }
 
 function bytes(a) { return new Uint8Array(a); }
+/* Karakter di luar ASCII diganti '?', tetapi enter (\n) tetap dipertahankan. */
 function asciiTeks(s) { return s.replace(/[^\x20-\x7E\n]/g, '?'); }
 function teksByte(s) { return new TextEncoder().encode(asciiTeks(s)); }
 function gabung(arrs) {
@@ -532,37 +533,48 @@ function hapusLogo() {
 }
 
 /* ---------- Isi nota ---------- */
+const BULAN_NOTA = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+
+/* 2026-11-15 menjadi "15 Nov 2026" */
+function tglNota(s) {
+  const [y, m, d] = String(s).split('-');
+  return parseInt(d, 10) + ' ' + BULAN_NOTA[parseInt(m, 10) - 1] + ' ' + y;
+}
+
 /* Prefiks: '#' tengah tebal, '@' tengah, '*' kiri tebal, '~LOGO~' gambar logo, '~CUT~' potong kertas. */
 function buatTeksNota(tx) {
   const W = lebarNota(), garis = '-'.repeat(W);
   const r0 = n => nf.format(Math.round(Number(n) || 0));
-  const rp0 = n => 'Rp' + r0(n);
   const dua = (k, v) => k + ' '.repeat(Math.max(1, W - k.length - v.length)) + v;
-  const label = tx.metode === 'Cash' ? 'Tunai' : tx.metode;
+  const metode = tx.metode === 'Cash' ? 'Tunai' : tx.metode;
+  const noUrut = parseInt(String(tx.nomor).replace(/\D/g, ''), 10) || 0;
 
   const salinan = () => {
-    const L = ['~LOGO~', dua(tx.nomor, tx.jam), tx.tanggal, garis];
-    if (tx.nama) { L.push('Customer: ' + tx.nama); L.push(garis); }
+    const L = ['~LOGO~', '@SORE CAFE', '@CITRA HARMONI I-1/59', '@SIDOARJO', '@08787 134 6664', ''];
+    L.push(dua(tglNota(tx.tanggal) + ' ' + tx.jam, '#' + noUrut));
+    L.push(garis);
     tx.items.forEach(i => {
       L.push(i.nama);
-      L.push(dua(i.qty + ' x ' + rp0(i.harga), rp0(i.subtotal)));
+      L.push(dua('  ' + i.qty + 'x ' + r0(i.harga), r0(i.subtotal)));
     });
     L.push(garis);
     if (Number(tx.diskon_rp)) {
-      L.push(dua('Subtotal', rp0(tx.subtotal)));
-      L.push(dua('Diskon', '-' + rp0(tx.diskon_rp)));
+      L.push(dua('Subtotal', 'Rp' + r0(tx.subtotal)));
+      L.push(dua('Diskon', '-Rp' + r0(tx.diskon_rp)));
     }
-    L.push('*' + dua('TOTAL', rp0(tx.total)));
-    L.push(dua('Bayar (' + label + ')', rp0(tx.bayar)));
-    L.push(garis);
-    L.push('@Terima kasih', '@IG: @sorecafe.sda', '@Password WiFi: sorecafesidoarjo');
+    L.push(dua('Total', 'Rp' + r0(tx.total)));
+    L.push(dua(metode, 'Rp' + r0(tx.bayar)));
+    L.push('');
+    L.push('@THANK YOU FOR COMING');
+    L.push('@- GOOD FOOD, GOOD MOOD,');
+    L.push('@SEE YOU SOON -');
     return L.join('\n');
   };
 
   return salinan() + '\n~CUT~\n' + salinan() + '\n~CUT~';
 }
 
-/* Teks diubah menjadi perintah printer. Setiap '~CUT~' hanya memotong kertas, tanpa garis tambahan. */
+/* Teks diubah menjadi perintah printer. Setiap '~CUT~' memotong kertas. */
 function bangunData(teks) {
   const parts = [bytes([ESC, 0x40])];
   const potong = () => parts.push(bytes([ESC, 0x61, 0, ESC, 0x45, 0]), teksByte('\n\n\n'), bytes([GS, 0x56, 0x42, 0x00]));
